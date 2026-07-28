@@ -1,0 +1,53 @@
+name: Build and test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fxcam-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-tests:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            cmake \
+            ninja-build \
+            g++ \
+            libsdl2-dev \
+            libpng-dev \
+            libjpeg-dev \
+            libfreetype-dev \
+            zlib1g-dev \
+            libcjson-dev \
+            libfmt-dev
+
+      - name: Configure
+        run: cmake --preset linux-x86-64 -DFXCAM_BUILD_TESTS=ON
+
+      - name: Build Debug
+        run: cmake --build --preset linux-x86-64-dbg --parallel 2
+
+      - name: Test Debug
+        run: ctest --test-dir build/linux-x86-64 -C Debug --output-on-failure
+
+      - name: Build Release
+        run: cmake --build --preset linux-x86-64-rel --parallel 2
+
+      - name: Test Release
+        run: ctest --test-dir build/linux-x86-64 -C Release --output-on-failure

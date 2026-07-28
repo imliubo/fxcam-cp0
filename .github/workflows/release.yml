@@ -1,0 +1,181 @@
+name: Build and release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version; empty uses the project version initially, then increments the latest release patch"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fxcam-release
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ github.event.inputs.version || '' }}
+        run: |
+          set -euo pipefail
+
+          version="${REQUESTED_VERSION#v}"
+          if [[ -z "${version}" ]]; then
+            latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)"
+            if [[ -n "${latest_tag}" ]]; then
+              latest="${latest_tag#v}"
+              if [[ ! "${latest}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+                echo "Latest release is not a semantic version: ${latest_tag}" >&2
+                exit 1
+              fi
+              version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+            else
+              version="$(sed -nE 's/^set\(FXCAM_VERSION "([0-9]+\.[0-9]+\.[0-9]+)".*$/\1/p' CMakeLists.txt | head -n1)"
+            fi
+          fi
+
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must use MAJOR.MINOR.PATCH format, got: ${version}" >&2
+            exit 1
+          fi
+
+          tag="v${version}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists; choose a different manual version." >&2
+            exit 1
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "Building FXCam ${version}"
+
+      - name: Install cross-build tools
+        run: |
+          sudo sed -i '/^Types: deb$/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          sudo tee /etc/apt/sources.list.d/ubuntu-arm64.sources >/dev/null <<'EOF'
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: noble noble-updates noble-backports noble-security
+          Components: main universe restricted multiverse
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install --yes \
+            cmake \
+            ninja-build \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            pkg-config \
+            dpkg-dev \
+            libfreetype-dev:arm64 \
+            libpng-dev:arm64 \
+            libjpeg-dev:arm64 \
+            zlib1g-dev:arm64 \
+            libasound2-dev:arm64 \
+            libcjson-dev:arm64 \
+            libv4l-dev:arm64
+
+      - name: Cache downloaded build dependencies
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: fxcam-cp0-${{ runner.os }}-${{ hashFiles('cmake/toolchains/cp0-aarch64-linux-gnu.cmake', 'CMakeLists.txt') }}
+          restore-keys: |
+            fxcam-cp0-${{ runner.os }}-
+
+      - name: Prepare CM0 sysroot
+        shell: bash
+        run: |
+          set -euo pipefail
+          sysroot="${GITHUB_WORKSPACE}/.cache/sdk_bsp-src"
+          mkdir -p "${sysroot}"
+
+          if [[ ! -f "${sysroot}/usr/include/libcamera/camera.h" ]]; then
+            curl --fail --location --retry 3 \
+              https://github.com/CardputerZero/M5CardputerZero-UserDemo/releases/download/v0.0.4/sdk_bsp.tar.gz \
+              --output "${RUNNER_TEMP}/sdk_bsp.tar.gz"
+            tar -xf "${RUNNER_TEMP}/sdk_bsp.tar.gz" -C "${sysroot}"
+          fi
+
+          # The BSP contains target runtime libraries but omits several development headers
+          # and unversioned linker names. Add only those files from matching arm64 dev packages.
+          cp -a /usr/include/alsa "${sysroot}/usr/include/"
+          cp -a /usr/include/cjson "${sysroot}/usr/include/"
+          cp -a /usr/include/libv4l*.h "${sysroot}/usr/include/"
+          cp -a /usr/lib/aarch64-linux-gnu/libasound.so "${sysroot}/usr/lib/aarch64-linux-gnu/"
+          cp -a /usr/lib/aarch64-linux-gnu/libcjson.so "${sysroot}/usr/lib/aarch64-linux-gnu/"
+          cp -a /usr/lib/aarch64-linux-gnu/libv4l2.so "${sysroot}/usr/lib/aarch64-linux-gnu/"
+          cp -a /usr/lib/aarch64-linux-gnu/libv4lconvert.so "${sysroot}/usr/lib/aarch64-linux-gnu/"
+
+          if [[ ! -f "${sysroot}/usr/include/fmt/format.h" ]]; then
+            curl --fail --location --retry 3 \
+              https://github.com/fmtlib/fmt/archive/refs/tags/10.1.1.tar.gz \
+              --output "${RUNNER_TEMP}/fmt.tar.gz"
+            tar -xf "${RUNNER_TEMP}/fmt.tar.gz" -C "${RUNNER_TEMP}"
+            cp -a "${RUNNER_TEMP}/fmt-10.1.1/include/fmt" "${sysroot}/usr/include/"
+          fi
+
+      - name: Build arm64 package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ./package_deb.sh \
+            -DFXCAM_VERSION="${VERSION}" \
+            -DAPP_DISPLAY_NAME="FXCam" \
+            -DCM0_SDK_ROOT="${GITHUB_WORKSPACE}/.cache/sdk_bsp-src" \
+            -DCMAKE_SYSROOT="${GITHUB_WORKSPACE}/.cache/sdk_bsp-src" \
+            -DCM0_ALLOW_FETCH_DEPS=OFF
+
+      - name: Verify package
+        id: package
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          package="dist/FXCam_${VERSION}_m5stack1_arm64.deb"
+          test -f "${package}"
+          test "$(dpkg-deb --field "${package}" Architecture)" = "arm64"
+          test "$(dpkg-deb --field "${package}" Version)" = "${VERSION}-m5stack1"
+          dpkg-deb --contents "${package}"
+          (cd dist && sha256sum "$(basename "${package}")" > SHA256SUMS)
+          echo "path=${package}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FXCam-${{ steps.version.outputs.version }}-arm64
+          path: |
+            ${{ steps.package.outputs.path }}
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          PACKAGE: ${{ steps.package.outputs.path }}
+        run: |
+          gh release create "${TAG}" \
+            "${PACKAGE}" \
+            dist/SHA256SUMS \
+            --target "${GITHUB_SHA}" \
+            --title "FXCam ${TAG}" \
+            --generate-notes

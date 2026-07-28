@@ -1,0 +1,42 @@
+# Mac
+.DS_Store
+._*
+
+# build
+build/
+build-*
+dist/
+
+# test
+test
+
+# utility script
+clean-double.sh
+deploy.sh
+
+# mutagen local sync configuration/state
+mutagen.*
+mutagen.*.yml
+.mutagen.yml
+.mutagen/
+
+# clang
+.clangd
+compile_commands.json
+.idea/
+.vscode/
+*.bk
+
+# third_party
+# since we are using BSP
+# this folder is for reference only
+third_party
+
+# bsp related
+static_lib
+
+# cache
+.cache/
+
+# TODO
+TODO
