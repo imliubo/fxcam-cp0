@@ -28,6 +28,7 @@ class SdlKeypad {
   bool esc_pressed_{false};
   bool help_pressed_{false};
   bool capture_pressed_{false};
+  bool screenshot_pressed_{false};
   bool confirm_pressed_{false};
   bool delete_pressed_{false};
   bool zoom_out_pressed_{false};

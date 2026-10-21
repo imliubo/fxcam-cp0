@@ -81,6 +81,8 @@ Glyph glyph_for(char character) {
       return {0, 0, 26, 21, 21, 21, 21};
     case 'o':
       return {0, 0, 14, 17, 17, 17, 14};
+    case 'p':
+      return {0, 0, 30, 17, 17, 30, 16};
     case 'r':
       return {0, 0, 22, 25, 16, 16, 16};
     case 't':

@@ -5,6 +5,8 @@
 FXCam 是面向 M5CardputerZero / CM0 的复古滤镜相机应用，使用 LVGL 9 构建界面，
 通过 libcamera 支持 CSI 摄像头，通过 V4L2 支持 USB 摄像头，并集成 APPLaunch。工程最初
 参考了 [CardputerZero 相机工程](https://github.com/CardputerZero/CameraApp)。
+图库的全尺寸预览设计和 TJPGD 解码器参考了
+[CardputerZero/Files](https://github.com/CardputerZero/Files)。
 
 ## 功能
 
@@ -14,12 +16,14 @@ FXCam 是面向 M5CardputerZero / CM0 的复古滤镜相机应用，使用 LVGL 
 - Game Boy 滤镜在全尺寸照片上使用更细的像素块和 4 x 4 有序抖动。
 - 透明照片水印包含设备名、本地时间、应用名、光圈、当前滤镜和作者署名。
 - CSI 摄像头照片包含 EXIF 信息。
-- 内置图库支持图片信息查看和删除确认。
+- 内置图库支持缩略图缓存、全尺寸细节缩放和平移、图片信息查看以及删除确认。
+- 支持在任意应用界面保存符合开发者门户要求的 320 x 170 截图。
 - CSI 摄像头使用 libcamera，USB 摄像头自动回退到 V4L2。
 - 支持 APPLaunch 入口、应用图标、arm64 Debian 包和 ADB 直接部署。
 
 照片保存到 `~/Pictures/DCIM/Camera`。视频模块将 MJPEG AVI 保存到 `~/Videos/Camera`，
 但当前设备界面主要面向拍照操作。
+应用截图保存到 `~/Pictures/Screenshots/FXCam`。
 
 ## 按键
 
@@ -28,6 +32,7 @@ FXCam 是面向 M5CardputerZero / CM0 的复古滤镜相机应用，使用 LVGL 
 | `Fn + 左`、`Z`、`H`、`2`、`,` | 上一个滤镜 |
 | `Fn + 右`、`C`、`J`、`3`、`.` | 下一个滤镜 |
 | `6`、`Enter` | 拍照 |
+| `Fn + J`（`Print Screen`） | 保存应用截图 |
 | `4`、`Esc` | 返回或退出 |
 | `5`、`7` | 缩小或放大 |
 | `8` | 打开图库 |
@@ -36,7 +41,8 @@ FXCam 是面向 M5CardputerZero / CM0 的复古滤镜相机应用，使用 LVGL 
 | `U` | 切换 CSI / USB 摄像头 |
 
 图库中，`4` 返回相机，`5` 和 `7` 切换上一张或下一张图片，`6` 查看图片信息，`8` 请求
-删除，`Enter` 确认对话框操作。
+删除。按 `Enter` 使用完整分辨率查看当前图片；细节模式中使用 `5` / `7` 缩放，使用
+`Z` / `H` / `C` / `J` 和 `F` / `X` 平移，按 `8` 复位，按 `4`、`Esc` 或 `Enter` 返回图库。
 
 ## 环境要求
 

@@ -1,6 +1,7 @@
 #include "gallery_viewmodel.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -13,6 +14,10 @@
 
 namespace viewmodel {
 namespace {
+
+constexpr std::array<int32_t, 7> kDetailZoomLevels{{100, 150, 200, 300, 400, 600, 800}};
+constexpr int32_t kDetailPanStep = 12;
+constexpr int32_t kMaxPanOffset  = 100;
 
 struct ImageDimensions {
   int width{0};
@@ -161,6 +166,10 @@ void GalleryViewModel::on_enter() {
   confirm_delete_ = false;
   delete_choice_  = 0;
   info_visible_   = false;
+  detail_mode_    = false;
+  cached_source_path_.clear();
+  cached_preview_path_.clear();
+  reset_detail_transform_();
   refresh_snapshot_();
 }
 
@@ -222,6 +231,55 @@ bool GalleryViewModel::handle_action(app::AppAction action) {
     return true;
   }
 
+  if (detail_mode_) {
+    if (action == app::AppAction::ShowInfo) {
+      info_visible_ = true;
+      refresh_snapshot_();
+      return true;
+    }
+
+    if (action == app::AppAction::Exit || action == app::AppAction::Confirm) {
+      detail_mode_ = false;
+      reset_detail_transform_();
+      refresh_snapshot_();
+      return true;
+    }
+
+    if (action == app::AppAction::ZoomOut || action == app::AppAction::ZoomIn) {
+      step_detail_zoom_(action == app::AppAction::ZoomIn ? 1 : -1);
+      refresh_snapshot_();
+      return true;
+    }
+
+    if (action == app::AppAction::ToggleCaptureMode) {
+      reset_detail_transform_();
+      refresh_snapshot_();
+      return true;
+    }
+
+    if (action == app::AppAction::PanLeft || action == app::AppAction::PanRight ||
+        action == app::AppAction::PanUp || action == app::AppAction::PanDown) {
+      if (detail_zoom_index_ == 0) {
+        return true;
+      }
+      if (action == app::AppAction::PanLeft) {
+        detail_pan_x_ -= kDetailPanStep;
+      } else if (action == app::AppAction::PanRight) {
+        detail_pan_x_ += kDetailPanStep;
+      } else if (action == app::AppAction::PanUp) {
+        detail_pan_y_ -= kDetailPanStep;
+      } else {
+        detail_pan_y_ += kDetailPanStep;
+      }
+      detail_pan_x_ = std::clamp(detail_pan_x_, -kMaxPanOffset, kMaxPanOffset);
+      detail_pan_y_ = std::clamp(detail_pan_y_, -kMaxPanOffset, kMaxPanOffset);
+      refresh_snapshot_();
+      return true;
+    }
+
+    return true;
+  }
+
   if (action == app::AppAction::ZoomOut || action == app::AppAction::PanLeft) {
     services_->gallery->previous();
     refresh_snapshot_();
@@ -255,6 +313,17 @@ bool GalleryViewModel::handle_action(app::AppAction action) {
     return true;
   }
 
+  if (action == app::AppAction::Confirm) {
+    if (!services_->gallery->has_items()) {
+      refresh_snapshot_();
+      return true;
+    }
+    detail_mode_ = true;
+    reset_detail_transform_();
+    refresh_snapshot_();
+    return true;
+  }
+
   if (action == app::AppAction::Exit) {
     request_transition(app::AppState::Camera);
     return true;
@@ -270,10 +339,15 @@ void GalleryViewModel::refresh_snapshot_() {
   snapshot_.confirm_delete = confirm_delete_;
   snapshot_.delete_choice  = delete_choice_;
   snapshot_.info_visible   = info_visible_;
+  snapshot_.detail_mode    = detail_mode_;
+  snapshot_.zoom_percent   = kDetailZoomLevels[detail_zoom_index_];
+  snapshot_.pan_x          = detail_pan_x_;
+  snapshot_.pan_y          = detail_pan_y_;
 
   if (!services_ || !services_->gallery) {
     snapshot_.status = "Gallery unavailable";
-    image_path_subject_.set("");
+    source_path_subject_.set("");
+    preview_path_subject_.set("");
     counter_subject_.set("0 / 0");
     title_subject_.set(snapshot_.status);
     status_subject_.set(snapshot_.status);
@@ -282,16 +356,26 @@ void GalleryViewModel::refresh_snapshot_() {
     delete_choice_subject_.set(0);
     info_visible_subject_.set(false);
     info_text_subject_.set("");
+    detail_mode_subject_.set(false);
+    zoom_percent_subject_.set(100);
+    pan_x_subject_.set(0);
+    pan_y_subject_.set(0);
     return;
   }
 
-  snapshot_.path         = services_->gallery->current_path();
-  snapshot_.preview_path = services_->gallery->current_preview_path();
+  snapshot_.path = services_->gallery->current_path();
+  if (snapshot_.path != cached_source_path_) {
+    cached_source_path_  = snapshot_.path;
+    cached_preview_path_ = snapshot_.path.empty() ? "" : services_->gallery->current_preview_path();
+  }
+  snapshot_.preview_path = cached_preview_path_;
   snapshot_.status       = services_->gallery->status_message();
   snapshot_.index = services_->gallery->has_items() ? services_->gallery->current_index() + 1 : 0;
   snapshot_.count = services_->gallery->count();
 
-  image_path_subject_.set(snapshot_.preview_path.empty() ? snapshot_.path : snapshot_.preview_path);
+  source_path_subject_.set(snapshot_.path);
+  preview_path_subject_.set(snapshot_.preview_path.empty() ? snapshot_.path
+                                                           : snapshot_.preview_path);
   counter_subject_.set(snapshot_.count == 0 ? "0 / 0"
                                             : std::to_string(snapshot_.index) + " / " +
                                                   std::to_string(snapshot_.count));
@@ -305,6 +389,29 @@ void GalleryViewModel::refresh_snapshot_() {
   snapshot_.info_text = info_visible_ ? build_info_text_() : "";
   info_visible_subject_.set(snapshot_.info_visible);
   info_text_subject_.set(snapshot_.info_text);
+  detail_mode_subject_.set(snapshot_.detail_mode);
+  zoom_percent_subject_.set(snapshot_.zoom_percent);
+  pan_x_subject_.set(snapshot_.pan_x);
+  pan_y_subject_.set(snapshot_.pan_y);
+}
+
+void GalleryViewModel::reset_detail_transform_() {
+  detail_zoom_index_ = 0;
+  detail_pan_x_      = 0;
+  detail_pan_y_      = 0;
+}
+
+void GalleryViewModel::step_detail_zoom_(int direction) {
+  if (direction > 0 && detail_zoom_index_ + 1 < kDetailZoomLevels.size()) {
+    ++detail_zoom_index_;
+  } else if (direction < 0 && detail_zoom_index_ > 0) {
+    --detail_zoom_index_;
+  }
+
+  if (detail_zoom_index_ == 0) {
+    detail_pan_x_ = 0;
+    detail_pan_y_ = 0;
+  }
 }
 
 std::string GalleryViewModel::build_info_text_() const {

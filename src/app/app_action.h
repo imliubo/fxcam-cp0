@@ -7,6 +7,7 @@ enum class AppAction {
   Exit,
   ToggleHint,
   Capture,
+  Screenshot,
   Confirm,
   Delete,
   ZoomOut,

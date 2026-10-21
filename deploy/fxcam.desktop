@@ -2,7 +2,7 @@
 Type=Application
 Name=FXCam
 Comment=Camera with retro effects for M5CardputerZero
-Exec=/usr/bin/fxcam
+Exec=/usr/share/APPLaunch/bin/fxcam
 Icon=share/images/fxcam.png
 Terminal=false
 Categories=Utility;

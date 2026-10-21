@@ -42,11 +42,12 @@ fi
 "${ADB}" shell mkdir -p \
   /usr/share/fxcam/audio \
   /usr/share/fxcam/fonts \
+  /usr/share/APPLaunch/bin \
   /usr/share/APPLaunch/applications \
   /usr/share/APPLaunch/share/images
 
-"${ADB}" push "${BINARY}" /usr/bin/fxcam
-"${ADB}" shell chmod 0755 /usr/bin/fxcam
+"${ADB}" push "${BINARY}" /usr/share/APPLaunch/bin/fxcam
+"${ADB}" shell chmod 0755 /usr/share/APPLaunch/bin/fxcam
 "${ADB}" push "${ROOT_DIR}/assets/audio/." /usr/share/fxcam/audio/
 "${ADB}" push "${ROOT_DIR}/assets/fonts/." /usr/share/fxcam/fonts/
 "${ADB}" push "${ROOT_DIR}/assets/images/fxcam.png" \
@@ -58,6 +59,7 @@ fi
   /usr/share/APPLaunch/share/images/fxcam.png
 # Remove files created by releases published under the previous names.
 "${ADB}" shell rm -f \
+  /usr/bin/fxcam \
   /usr/bin/pocket_pixel \
   /usr/share/APPLaunch/applications/pocket_pixel.desktop \
   /usr/share/APPLaunch/share/images/pocket_pixel.png \

@@ -15,6 +15,7 @@
 #include "screens/screen_manager.h"
 #include "services/app_services.h"
 #include "services/preview_frame_limiter.h"
+#include "ui/app_screenshot.h"
 #include "utils/device_config.h"
 #include "utils/logger.h"
 #include "viewmodels/camera_viewmodel.h"
@@ -215,7 +216,8 @@ void setup_screen_manager(screen::ScreenManager& manager,
   manager.register_screen(app::screen_id(app::AppState::Gallery), [services](lv_obj_t* parent) {
     auto viewmodel = std::make_shared<viewmodel::GalleryViewModel>(services);
     auto view      = std::make_unique<view::GalleryView>(parent);
-    view->bind(viewmodel->image_path_subject(),
+    view->bind(viewmodel->source_path_subject(),
+               viewmodel->preview_path_subject(),
                viewmodel->counter_subject(),
                viewmodel->title_subject(),
                viewmodel->status_subject(),
@@ -224,7 +226,11 @@ void setup_screen_manager(screen::ScreenManager& manager,
                viewmodel->delete_choice_subject(),
                viewmodel->info_visible_subject(),
                viewmodel->info_text_subject(),
-               viewmodel->info_scroll_subject());
+               viewmodel->info_scroll_subject(),
+               viewmodel->detail_mode_subject(),
+               viewmodel->zoom_percent_subject(),
+               viewmodel->pan_x_subject(),
+               viewmodel->pan_y_subject());
     return std::make_shared<screen::Screen>(parent, std::move(view), viewmodel);
   });
 }
@@ -351,76 +357,108 @@ int main() {
 
   LOG_INFO("FXCam application started");
 
-  bool running = true;
-  auto dispatch_app_action =
-      [&running, &manager, &services, &state_machine](app::AppAction action) {
-        if (action == app::AppAction::ToggleCameraBackend) {
-          if (services && services->camera) {
-            const service::CameraBackendPreference preference =
-                services->camera->toggle_backend_preference();
-            LOG_INFO("Camera backend toggle requested: {}",
-                     preference == service::CameraBackendPreference::Usb ? "usb" : "csi");
-          }
-          (void)state_machine.transition_to(app::AppState::Splash);
-          manager.replace_screen(app::screen_id(app::AppState::Splash));
-          if (services && services->audio) {
-            services->audio->play_click();
-          }
-          return;
+  bool running             = true;
+  auto dispatch_app_action = [&running, &manager, &services, &state_machine](
+                                 app::AppAction action) {
+    if (action == app::AppAction::Screenshot) {
+      auto current = manager.current_screen();
+      if (current && current->root()) {
+        const auto result = ui::capture_app_screenshot(current->root());
+        ui::show_screenshot_status(current->root(), result);
+        if (services && services->audio) {
+          services->audio->play_click();
         }
+      }
+      return;
+    }
 
-        auto current = manager.current_screen();
-        const bool is_camera_screen =
-            current &&
-            std::dynamic_pointer_cast<viewmodel::CameraViewModel>(current->viewmodel()) != nullptr;
-        const bool capture_only_action = is_camera_screen && (action == app::AppAction::Capture ||
-                                                              action == app::AppAction::Confirm);
-        if (current && !capture_only_action) {
-          if (auto* camera_view = dynamic_cast<view::CameraView*>(current->view())) {
-            camera_view->show_controls_temporarily();
-          }
-        }
-        if (is_camera_screen) {
-          if (action == app::AppAction::ZoomOut) {
-            action = app::AppAction::Exit;
-          } else if (action == app::AppAction::ZoomIn) {
-            action = app::AppAction::ZoomOut;
-          } else if (action == app::AppAction::OpenGallery) {
-            action = app::AppAction::ZoomIn;
-          } else if (action == app::AppAction::ToggleCaptureMode) {
-            action = app::AppAction::OpenGallery;
-          }
-        }
+    if (action == app::AppAction::ToggleCameraBackend) {
+      if (services && services->camera) {
+        const service::CameraBackendPreference preference =
+            services->camera->toggle_backend_preference();
+        LOG_INFO("Camera backend toggle requested: {}",
+                 preference == service::CameraBackendPreference::Usb ? "usb" : "csi");
+      }
+      (void)state_machine.transition_to(app::AppState::Splash);
+      manager.replace_screen(app::screen_id(app::AppState::Splash));
+      if (services && services->audio) {
+        services->audio->play_click();
+      }
+      return;
+    }
 
-        const bool is_gallery_screen =
-            current &&
-            std::dynamic_pointer_cast<viewmodel::GalleryViewModel>(current->viewmodel()) != nullptr;
-        if (is_gallery_screen) {
-          if (action == app::AppAction::ZoomOut) {
-            action = app::AppAction::Exit;
-          } else if (action == app::AppAction::ZoomIn) {
-            action = app::AppAction::PanLeft;
-          } else if (action == app::AppAction::Capture) {
-            action = app::AppAction::ShowInfo;
-          } else if (action == app::AppAction::OpenGallery) {
-            action = app::AppAction::PanRight;
-          } else if (action == app::AppAction::ToggleCaptureMode) {
-            action = app::AppAction::Delete;
-          }
-        }
+    auto current                = manager.current_screen();
+    const bool is_camera_screen = current && std::dynamic_pointer_cast<viewmodel::CameraViewModel>(
+                                                 current->viewmodel()) != nullptr;
+    const bool capture_only_action = is_camera_screen && (action == app::AppAction::Capture ||
+                                                          action == app::AppAction::Confirm);
+    if (current && !capture_only_action) {
+      if (auto* camera_view = dynamic_cast<view::CameraView*>(current->view())) {
+        camera_view->show_controls_temporarily();
+      }
+    }
+    if (current) {
+      if (auto* gallery_view = dynamic_cast<view::GalleryView*>(current->view())) {
+        gallery_view->show_controls_temporarily();
+      }
+    }
+    if (is_camera_screen) {
+      if (action == app::AppAction::ZoomOut) {
+        action = app::AppAction::Exit;
+      } else if (action == app::AppAction::ZoomIn) {
+        action = app::AppAction::ZoomOut;
+      } else if (action == app::AppAction::OpenGallery) {
+        action = app::AppAction::ZoomIn;
+      } else if (action == app::AppAction::ToggleCaptureMode) {
+        action = app::AppAction::OpenGallery;
+      }
+    }
 
-        if (action == app::AppAction::Exit) {
-          if (dispatch_action(manager, services, action)) {
-            return;
-          }
-          LOG_INFO("Exit requested by keyboard");
-          running = false;
-          request_program_exit();
-          return;
+    const auto gallery_vm =
+        current ? std::dynamic_pointer_cast<viewmodel::GalleryViewModel>(current->viewmodel())
+                : nullptr;
+    if (gallery_vm) {
+      if (gallery_vm->detail_mode()) {
+        if (action == app::AppAction::ZoomOut) {
+          action = app::AppAction::Exit;
+        } else if (action == app::AppAction::ZoomIn) {
+          action = app::AppAction::ZoomOut;
+        } else if (action == app::AppAction::Capture) {
+          action = app::AppAction::ShowInfo;
+        } else if (action == app::AppAction::OpenGallery) {
+          action = app::AppAction::ZoomIn;
+        } else if (action == app::AppAction::PreviousFilter) {
+          action = app::AppAction::PanLeft;
+        } else if (action == app::AppAction::NextFilter) {
+          action = app::AppAction::PanRight;
         }
+      } else {
+        if (action == app::AppAction::ZoomOut) {
+          action = app::AppAction::Exit;
+        } else if (action == app::AppAction::ZoomIn || action == app::AppAction::PreviousFilter) {
+          action = app::AppAction::PanLeft;
+        } else if (action == app::AppAction::Capture) {
+          action = app::AppAction::ShowInfo;
+        } else if (action == app::AppAction::OpenGallery || action == app::AppAction::NextFilter) {
+          action = app::AppAction::PanRight;
+        } else if (action == app::AppAction::ToggleCaptureMode) {
+          action = app::AppAction::Delete;
+        }
+      }
+    }
 
-        dispatch_action(manager, services, action);
-      };
+    if (action == app::AppAction::Exit) {
+      if (dispatch_action(manager, services, action)) {
+        return;
+      }
+      LOG_INFO("Exit requested by keyboard");
+      running = false;
+      request_program_exit();
+      return;
+    }
+
+    dispatch_action(manager, services, action);
+  };
 
   input::LinuxKeypad keypad;
   keypad.set_action_callback(dispatch_app_action);

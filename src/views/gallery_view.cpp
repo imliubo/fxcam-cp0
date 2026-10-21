@@ -10,10 +10,12 @@
 #include <src/layouts/flex/lv_flex.h>
 #include <src/misc/lv_area.h>
 #include <src/misc/lv_color.h>
+#include <src/misc/lv_timer.h>
 #include <src/widgets/image/lv_image.h>
 #include <src/widgets/label/lv_label.h>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 
 #include "ui/app_color.h"
@@ -27,15 +29,27 @@ namespace font  = ui::font;
 
 namespace {
 
-constexpr int32_t kBottomBarHeight  = 40;
-constexpr int32_t kActionLiftY      = -6;
-constexpr int32_t kGuideLineHeight  = 6;
-constexpr int32_t kPreviewFitWidth  = 320;
-constexpr int32_t kPreviewFitHeight = 170;
-constexpr int32_t kInfoScrollStep   = 26;
-constexpr int32_t kInfoPanelWidth   = 244;
-constexpr int32_t kInfoPanelHeight  = 165;
-constexpr int32_t kInfoTitleHeight  = 28;
+constexpr int32_t kScreenWidth        = 320;
+constexpr int32_t kScreenHeight       = 170;
+constexpr int32_t kBottomBarHeight    = 40;
+constexpr int32_t kActionLiftY        = -6;
+constexpr int32_t kGuideLineHeight    = 6;
+constexpr int32_t kInfoScrollStep     = 26;
+constexpr int32_t kInfoPanelWidth     = 244;
+constexpr int32_t kInfoPanelHeight    = 165;
+constexpr int32_t kInfoTitleHeight    = 28;
+constexpr int32_t kNavigatorWidth     = 72;
+constexpr int32_t kNavigatorHeight    = 48;
+constexpr int32_t kNavigatorPadding   = 4;
+constexpr uint32_t kMaximumImageScale = 2048;
+constexpr uint32_t kControlsVisibleMs = 3000;
+
+void controls_hide_timer_cb(lv_timer_t* timer) {
+  auto* view = static_cast<GalleryView*>(lv_timer_get_user_data(timer));
+  if (view) {
+    view->hide_controls();
+  }
+}
 
 void style_transparent_container(lv_obj_t* obj) {
   lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, 0);
@@ -45,15 +59,60 @@ void style_transparent_container(lv_obj_t* obj) {
   lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
 }
 
-void gallery_image_observer_cb(lv_observer_t* observer, lv_subject_t* subject) {
-  auto* view  = static_cast<GalleryView*>(lv_observer_get_user_data(observer));
-  auto* image = lv_observer_get_target_obj(observer);
-  if (!view || !image) {
+bool is_jpeg_path(std::string path) {
+  std::transform(path.begin(), path.end(), path.begin(), [](unsigned char value) {
+    return static_cast<char>(std::tolower(value));
+  });
+  const std::string extension = std::filesystem::path(path).extension().string();
+  return extension == ".jpg" || extension == ".jpeg";
+}
+
+void gallery_source_path_observer_cb(lv_observer_t* observer, lv_subject_t* subject) {
+  auto* view = static_cast<GalleryView*>(lv_observer_get_user_data(observer));
+  if (!view) {
     return;
   }
 
   const char* path = lv_subject_get_string(subject);
-  view->set_observed_image_path(image, path ? path : "");
+  view->set_observed_source_path(path ? path : "");
+}
+
+void gallery_preview_path_observer_cb(lv_observer_t* observer, lv_subject_t* subject) {
+  auto* view = static_cast<GalleryView*>(lv_observer_get_user_data(observer));
+  if (!view) {
+    return;
+  }
+
+  const char* path = lv_subject_get_string(subject);
+  view->set_observed_preview_path(path ? path : "");
+}
+
+void gallery_detail_mode_observer_cb(lv_observer_t* observer, lv_subject_t* subject) {
+  auto* view = static_cast<GalleryView*>(lv_observer_get_user_data(observer));
+  if (view) {
+    view->update_detail_mode_(lv_subject_get_int(subject) != 0);
+  }
+}
+
+void gallery_zoom_observer_cb(lv_observer_t* observer, lv_subject_t* subject) {
+  auto* view = static_cast<GalleryView*>(lv_observer_get_user_data(observer));
+  if (view) {
+    view->update_zoom_percent_(lv_subject_get_int(subject));
+  }
+}
+
+void gallery_pan_x_observer_cb(lv_observer_t* observer, lv_subject_t* subject) {
+  auto* view = static_cast<GalleryView*>(lv_observer_get_user_data(observer));
+  if (view) {
+    view->update_pan_x_(lv_subject_get_int(subject));
+  }
+}
+
+void gallery_pan_y_observer_cb(lv_observer_t* observer, lv_subject_t* subject) {
+  auto* view = static_cast<GalleryView*>(lv_observer_get_user_data(observer));
+  if (view) {
+    view->update_pan_y_(lv_subject_get_int(subject));
+  }
 }
 
 void gallery_delete_choice_observer_cb(lv_observer_t* observer, lv_subject_t* subject) {
@@ -86,6 +145,7 @@ void gallery_info_visible_observer_cb(lv_observer_t* observer, lv_subject_t* sub
 
   if (lv_subject_get_int(subject) != 0) {
     lv_obj_remove_flag(scrim, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(scrim);
     view->update_info_scroll_(0);
   } else {
     lv_obj_add_flag(scrim, LV_OBJ_FLAG_HIDDEN);
@@ -127,9 +187,24 @@ void style_dialog_action(lv_obj_t* obj, bool selected, bool destructive) {
 GalleryView::GalleryView(lv_obj_t* parent)
     : BaseView(parent) {
   build_();
+  show_controls_temporarily();
 }
 
-void GalleryView::bind(lv_subject_t* image_path_subject,
+GalleryView::~GalleryView() {
+  if (controls_hide_timer_) {
+    lv_timer_delete(controls_hide_timer_);
+    controls_hide_timer_ = nullptr;
+  }
+  if (preview_image_) {
+    lv_image_set_src(preview_image_, nullptr);
+  }
+  destroy();
+  preview_image_ = nullptr;
+  decoded_image_.reset();
+}
+
+void GalleryView::bind(lv_subject_t* source_path_subject,
+                       lv_subject_t* preview_path_subject,
                        lv_subject_t* counter_subject,
                        lv_subject_t* title_subject,
                        lv_subject_t* status_subject,
@@ -138,10 +213,21 @@ void GalleryView::bind(lv_subject_t* image_path_subject,
                        lv_subject_t* delete_choice_subject,
                        lv_subject_t* info_visible_subject,
                        lv_subject_t* info_text_subject,
-                       lv_subject_t* info_scroll_subject) {
-  if (preview_image_ && image_path_subject) {
-    lv_subject_add_observer_obj(image_path_subject,
-                                gallery_image_observer_cb,
+                       lv_subject_t* info_scroll_subject,
+                       lv_subject_t* detail_mode_subject,
+                       lv_subject_t* zoom_percent_subject,
+                       lv_subject_t* pan_x_subject,
+                       lv_subject_t* pan_y_subject) {
+  if (preview_image_ && source_path_subject) {
+    lv_subject_add_observer_obj(source_path_subject,
+                                gallery_source_path_observer_cb,
+                                preview_image_,
+                                this);
+  }
+
+  if (preview_image_ && preview_path_subject) {
+    lv_subject_add_observer_obj(preview_path_subject,
+                                gallery_preview_path_observer_cb,
                                 preview_image_,
                                 this);
   }
@@ -194,6 +280,28 @@ void GalleryView::bind(lv_subject_t* image_path_subject,
                                 info_scrim_,
                                 this);
   }
+
+  if (preview_image_ && detail_mode_subject) {
+    lv_subject_add_observer_obj(detail_mode_subject,
+                                gallery_detail_mode_observer_cb,
+                                preview_image_,
+                                this);
+  }
+
+  if (preview_image_ && zoom_percent_subject) {
+    lv_subject_add_observer_obj(zoom_percent_subject,
+                                gallery_zoom_observer_cb,
+                                preview_image_,
+                                this);
+  }
+
+  if (preview_image_ && pan_x_subject) {
+    lv_subject_add_observer_obj(pan_x_subject, gallery_pan_x_observer_cb, preview_image_, this);
+  }
+
+  if (preview_image_ && pan_y_subject) {
+    lv_subject_add_observer_obj(pan_y_subject, gallery_pan_y_observer_cb, preview_image_, this);
+  }
 }
 
 void GalleryView::build_() {
@@ -212,6 +320,7 @@ void GalleryView::build_() {
   build_preview_();
   build_top_bar_();
   build_bottom_bar_();
+  build_detail_navigator_();
   build_delete_dialog_();
   build_info_overlay_();
 }
@@ -222,9 +331,8 @@ void GalleryView::build_preview_() {
   style_transparent_container(preview_container_);
 
   preview_image_ = lv_image_create(preview_container_);
-  lv_obj_set_size(preview_image_, LV_PCT(100), LV_PCT(100));
-  lv_image_set_inner_align(preview_image_, LV_IMAGE_ALIGN_CONTAIN);
-  lv_image_set_antialias(preview_image_, false);
+  lv_obj_set_size(preview_image_, 1, 1);
+  lv_image_set_antialias(preview_image_, true);
   lv_obj_center(preview_image_);
 
   empty_label_ = lv_label_create(preview_container_);
@@ -232,6 +340,13 @@ void GalleryView::build_preview_() {
   lv_obj_set_style_text_color(empty_label_, lv_color_hex(color::DARK_ONSURFACE), 0);
   lv_label_set_text(empty_label_, "No photos");
   lv_obj_center(empty_label_);
+
+  preview_error_label_ = lv_label_create(preview_container_);
+  lv_obj_set_style_text_font(preview_error_label_, Font::inter_medium(14), 0);
+  lv_obj_set_style_text_color(preview_error_label_, lv_color_hex(color::DARK_ONSURFACEVARIANT), 0);
+  lv_label_set_text(preview_error_label_, "No preview");
+  lv_obj_center(preview_error_label_);
+  lv_obj_add_flag(preview_error_label_, LV_OBJ_FLAG_HIDDEN);
 }
 
 void GalleryView::build_top_bar_() {
@@ -271,19 +386,64 @@ void GalleryView::build_bottom_bar_() {
                     Font::camera_icons(32),
                     nullptr,
                     LV_ALIGN_LEFT_MID,
-                    32);
+                    32,
+                    0);
 
   /* left navigation key */
-  build_key_action_(font::ICON_ARROW_LEFT, Font::camera_icons(32), nullptr, LV_ALIGN_CENTER, -56);
+  build_key_action_(font::ICON_ARROW_LEFT,
+                    Font::camera_icons(32),
+                    nullptr,
+                    LV_ALIGN_CENTER,
+                    -56,
+                    1);
 
   /* info icon key */
-  build_key_action_(font::ICON_INFO, Font::camera_icons(32), nullptr, LV_ALIGN_CENTER, -3);
+  build_key_action_(font::ICON_INFO, Font::camera_icons(32), nullptr, LV_ALIGN_CENTER, -3, 2);
 
   /* right navigation key */
-  build_key_action_(font::ICON_ARROW_RIGHT, Font::camera_icons(32), nullptr, LV_ALIGN_CENTER, 56);
+  build_key_action_(font::ICON_ARROW_RIGHT,
+                    Font::camera_icons(32),
+                    nullptr,
+                    LV_ALIGN_CENTER,
+                    56,
+                    3);
 
   /* delete key */
-  build_key_action_(font::ICON_TRASH, Font::camera_icons(32), nullptr, LV_ALIGN_RIGHT_MID, -32);
+  build_key_action_(font::ICON_TRASH, Font::camera_icons(32), nullptr, LV_ALIGN_RIGHT_MID, -32, 4);
+}
+
+void GalleryView::build_detail_navigator_() {
+  detail_navigator_ = lv_obj_create(root_);
+  lv_obj_set_size(detail_navigator_, kNavigatorWidth, kNavigatorHeight);
+  lv_obj_set_style_bg_color(detail_navigator_, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(detail_navigator_, LV_OPA_50, 0);
+  lv_obj_set_style_border_color(detail_navigator_, lv_color_white(), 0);
+  lv_obj_set_style_border_opa(detail_navigator_, LV_OPA_50, 0);
+  lv_obj_set_style_border_width(detail_navigator_, 1, 0);
+  lv_obj_set_style_radius(detail_navigator_, 2, 0);
+  lv_obj_set_style_pad_all(detail_navigator_, kNavigatorPadding, 0);
+  lv_obj_clear_flag(detail_navigator_, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_align(detail_navigator_, LV_ALIGN_TOP_RIGHT, -8, 8);
+
+  detail_viewport_ = lv_obj_create(detail_navigator_);
+  lv_obj_set_size(detail_viewport_, kNavigatorWidth - kNavigatorPadding * 2, 22);
+  lv_obj_set_style_bg_color(detail_viewport_, lv_color_white(), 0);
+  lv_obj_set_style_bg_opa(detail_viewport_, LV_OPA_20, 0);
+  lv_obj_set_style_border_color(detail_viewport_, lv_color_white(), 0);
+  lv_obj_set_style_border_opa(detail_viewport_, LV_OPA_90, 0);
+  lv_obj_set_style_border_width(detail_viewport_, 1, 0);
+  lv_obj_set_style_radius(detail_viewport_, 0, 0);
+  lv_obj_set_style_pad_all(detail_viewport_, 0, 0);
+  lv_obj_clear_flag(detail_viewport_, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_align(detail_viewport_, LV_ALIGN_TOP_LEFT, 0, 0);
+
+  detail_zoom_label_ = lv_label_create(detail_navigator_);
+  lv_obj_set_style_text_font(detail_zoom_label_, Font::inter_semibold(10), 0);
+  lv_obj_set_style_text_color(detail_zoom_label_, lv_color_white(), 0);
+  lv_label_set_text(detail_zoom_label_, "100%");
+  lv_obj_align(detail_zoom_label_, LV_ALIGN_BOTTOM_RIGHT, 0, 1);
+
+  lv_obj_add_flag(detail_navigator_, LV_OBJ_FLAG_HIDDEN);
 }
 
 void GalleryView::build_delete_dialog_() {
@@ -430,7 +590,8 @@ void GalleryView::build_key_action_(const char* key_icon,
                                     lv_font_t* key_font,
                                     const char* action_icon,
                                     lv_align_t align,
-                                    int32_t x_offset) {
+                                    int32_t x_offset,
+                                    size_t action_index) {
   lv_obj_t* key = lv_obj_create(bottom_bar_);
   lv_obj_set_size(key, 36, 36);
   style_transparent_container(key);
@@ -441,6 +602,9 @@ void GalleryView::build_key_action_(const char* key_icon,
   lv_obj_set_style_text_color(key_label, lv_color_white(), 0);
   lv_label_set_text(key_label, key_icon ? key_icon : "");
   lv_obj_align(key_label, LV_ALIGN_CENTER, action_icon ? -7 : 0, 0);
+  if (action_index < bottom_action_labels_.size()) {
+    bottom_action_labels_[action_index] = key_label;
+  }
 
   if (action_icon) {
     lv_obj_t* action_label = lv_label_create(key);
@@ -461,33 +625,244 @@ void GalleryView::build_key_action_(const char* key_icon,
   lv_obj_align_to(guide_line, key, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
 }
 
-void GalleryView::set_observed_image_path(lv_obj_t* image, const char* path) {
-  if (!image) {
+void GalleryView::set_observed_source_path(const char* path) {
+  source_path_ = path ? path : "";
+  if (detail_mode_) {
+    reload_image_();
+  }
+}
+
+void GalleryView::set_observed_preview_path(const char* path) {
+  preview_path_ = path ? path : "";
+  if (!detail_mode_) {
+    reload_image_();
+  }
+}
+
+void GalleryView::update_detail_mode_(bool enabled) {
+  if (detail_mode_ == enabled) {
     return;
   }
 
-  if (!path || path[0] == '\0') {
-    lvgl_image_path_.clear();
-    lv_image_set_scale(image, LV_SCALE_NONE);
-    lv_image_set_src(image, nullptr);
+  detail_mode_ = enabled;
+  if (top_bar_) {
+    if (detail_mode_) {
+      lv_obj_add_flag(top_bar_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_remove_flag(top_bar_, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  update_bottom_actions_();
+  reload_image_();
+}
+
+void GalleryView::update_zoom_percent_(int32_t percent) {
+  zoom_percent_ = std::clamp(percent, 100, 800);
+  apply_image_transform_();
+}
+
+void GalleryView::update_pan_x_(int32_t x) {
+  pan_x_ = std::clamp(x, -100, 100);
+  apply_image_transform_();
+}
+
+void GalleryView::update_pan_y_(int32_t y) {
+  pan_y_ = std::clamp(y, -100, 100);
+  apply_image_transform_();
+}
+
+void GalleryView::show_controls_temporarily() {
+  controls_visible_ = true;
+  if (bottom_bar_) {
+    lv_obj_remove_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+  }
+  update_detail_navigator_();
+
+  if (controls_hide_timer_) {
+    lv_timer_delete(controls_hide_timer_);
+  }
+  controls_hide_timer_ = lv_timer_create(controls_hide_timer_cb, kControlsVisibleMs, this);
+  if (controls_hide_timer_) {
+    lv_timer_set_repeat_count(controls_hide_timer_, 1);
+  }
+}
+
+void GalleryView::hide_controls() {
+  controls_hide_timer_ = nullptr;
+  controls_visible_    = false;
+  if (bottom_bar_) {
+    lv_obj_add_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (detail_navigator_) {
+    lv_obj_add_flag(detail_navigator_, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void GalleryView::reload_image_() {
+  if (!preview_image_) {
     return;
   }
 
-  lvgl_image_path_ = std::string("A:") + path;
-  lv_image_set_src(image, lvgl_image_path_.c_str());
+  lv_image_set_src(preview_image_, nullptr);
+  decoded_image_.reset();
+  lvgl_image_path_.clear();
+  image_width_  = 0;
+  image_height_ = 0;
 
-  lv_image_header_t header{};
-  if (lv_image_decoder_get_info(lvgl_image_path_.c_str(), &header) != LV_RESULT_OK ||
-      header.w == 0 || header.h == 0) {
+  const std::string& path = detail_mode_ ? source_path_ : preview_path_;
+  if (path.empty()) {
+    set_preview_error_visible_(false);
+    lv_obj_set_size(preview_image_, 1, 1);
+    update_detail_navigator_();
     return;
   }
 
-  const uint32_t scale_x = static_cast<uint32_t>(kPreviewFitWidth * LV_SCALE_NONE / header.w);
-  const uint32_t scale_y = static_cast<uint32_t>(kPreviewFitHeight * LV_SCALE_NONE / header.h);
-  const uint32_t scale =
+  if (detail_mode_ && is_jpeg_path(path)) {
+    decoded_image_ = ui::decode_gallery_jpeg(path);
+    if (decoded_image_) {
+      image_width_  = decoded_image_->header.w;
+      image_height_ = decoded_image_->header.h;
+      lv_image_set_src(preview_image_, decoded_image_.get());
+    }
+  } else {
+    lvgl_image_path_ = std::string("A:") + path;
+    lv_image_header_t header{};
+    if (lv_image_decoder_get_info(lvgl_image_path_.c_str(), &header) == LV_RESULT_OK) {
+      image_width_  = header.w;
+      image_height_ = header.h;
+      lv_image_set_src(preview_image_, lvgl_image_path_.c_str());
+    }
+  }
+
+  if (image_width_ == 0 || image_height_ == 0) {
+    set_preview_error_visible_(true);
+    lv_obj_set_size(preview_image_, 1, 1);
+    update_detail_navigator_();
+    return;
+  }
+
+  set_preview_error_visible_(false);
+  lv_obj_set_size(preview_image_,
+                  static_cast<int32_t>(image_width_),
+                  static_cast<int32_t>(image_height_));
+  lv_image_set_pivot(preview_image_,
+                     static_cast<int32_t>(image_width_ / 2),
+                     static_cast<int32_t>(image_height_ / 2));
+  lv_image_set_antialias(preview_image_, true);
+  apply_image_transform_();
+}
+
+void GalleryView::apply_image_transform_() {
+  if (!preview_image_ || image_width_ == 0 || image_height_ == 0) {
+    update_detail_navigator_();
+    return;
+  }
+
+  const int32_t viewport_height = kScreenHeight;
+  const uint32_t scale_x =
+      static_cast<uint32_t>(static_cast<uint64_t>(kScreenWidth) * LV_SCALE_NONE / image_width_);
+  const uint32_t scale_y =
+      static_cast<uint32_t>(static_cast<uint64_t>(viewport_height) * LV_SCALE_NONE / image_height_);
+  fit_scale_ =
       std::max<uint32_t>(1, std::min({scale_x, scale_y, static_cast<uint32_t>(LV_SCALE_NONE)}));
-  lv_image_set_scale(image, scale);
-  lv_image_set_antialias(image, scale >= LV_SCALE_NONE);
+  const uint32_t scale = std::clamp<uint32_t>(
+      static_cast<uint32_t>(static_cast<uint64_t>(fit_scale_) * zoom_percent_ / 100),
+      1,
+      kMaximumImageScale);
+  lv_image_set_scale(preview_image_, scale);
+
+  const int32_t transformed_width =
+      static_cast<int32_t>(static_cast<uint64_t>(image_width_) * scale / LV_SCALE_NONE);
+  const int32_t transformed_height =
+      static_cast<int32_t>(static_cast<uint64_t>(image_height_) * scale / LV_SCALE_NONE);
+  const int32_t max_offset_x = std::max<int32_t>(0, (transformed_width - kScreenWidth) / 2);
+  const int32_t max_offset_y = std::max<int32_t>(0, (transformed_height - viewport_height) / 2);
+  const int32_t offset_x     = max_offset_x * pan_x_ / 100;
+  const int32_t offset_y     = max_offset_y * pan_y_ / 100;
+  const int32_t image_x      = kScreenWidth / 2 - static_cast<int32_t>(image_width_) / 2 - offset_x;
+  const int32_t image_y = kScreenHeight / 2 - static_cast<int32_t>(image_height_) / 2 - offset_y;
+  lv_obj_align(preview_image_, LV_ALIGN_TOP_LEFT, image_x, image_y);
+  lv_obj_invalidate(preview_image_);
+  update_detail_navigator_();
+}
+
+void GalleryView::update_bottom_actions_() {
+  constexpr std::array<const char*, 5> kOverviewActions{{font::ICON_ARROW_U_UP_LEFT,
+                                                         font::ICON_ARROW_LEFT,
+                                                         font::ICON_INFO,
+                                                         font::ICON_ARROW_RIGHT,
+                                                         font::ICON_TRASH}};
+  constexpr std::array<const char*, 5> kDetailActions{{font::ICON_ARROW_U_UP_LEFT,
+                                                       font::ICON_ZOOM_OUT,
+                                                       font::ICON_INFO,
+                                                       font::ICON_ZOOM_IN,
+                                                       font::ICON_GRID_FOUR}};
+  const auto& actions = detail_mode_ ? kDetailActions : kOverviewActions;
+  for (size_t index = 0; index < bottom_action_labels_.size(); ++index) {
+    if (bottom_action_labels_[index]) {
+      lv_label_set_text(bottom_action_labels_[index], actions[index]);
+    }
+  }
+}
+
+void GalleryView::update_detail_navigator_() {
+  if (!detail_navigator_) {
+    return;
+  }
+  if (!detail_mode_ || image_width_ == 0 || image_height_ == 0) {
+    lv_obj_add_flag(detail_navigator_, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  if (!controls_visible_) {
+    lv_obj_add_flag(detail_navigator_, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+
+  lv_obj_remove_flag(detail_navigator_, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(detail_navigator_);
+  if (detail_zoom_label_) {
+    lv_label_set_text_fmt(detail_zoom_label_, "%d%%", zoom_percent_);
+  }
+
+  const uint32_t scale = std::clamp<uint32_t>(
+      static_cast<uint32_t>(static_cast<uint64_t>(fit_scale_) * zoom_percent_ / 100),
+      1,
+      kMaximumImageScale);
+  const int32_t transformed_width =
+      static_cast<int32_t>(static_cast<uint64_t>(image_width_) * scale / LV_SCALE_NONE);
+  const int32_t transformed_height =
+      static_cast<int32_t>(static_cast<uint64_t>(image_height_) * scale / LV_SCALE_NONE);
+  const int32_t inner_width  = kNavigatorWidth - kNavigatorPadding * 2;
+  const int32_t inner_height = 24;
+  const int32_t viewport_width =
+      std::clamp<int32_t>(inner_width * kScreenWidth / std::max(kScreenWidth, transformed_width),
+                          5,
+                          inner_width);
+  const int32_t viewport_height = std::clamp<int32_t>(
+      inner_height * kScreenHeight / std::max(kScreenHeight, transformed_height),
+      4,
+      inner_height);
+  const int32_t available_x = inner_width - viewport_width;
+  const int32_t available_y = inner_height - viewport_height;
+  const int32_t x =
+      transformed_width <= kScreenWidth ? available_x / 2 : available_x * (pan_x_ + 100) / 200;
+  const int32_t y =
+      transformed_height <= kScreenHeight ? available_y / 2 : available_y * (pan_y_ + 100) / 200;
+  if (detail_viewport_) {
+    lv_obj_set_size(detail_viewport_, viewport_width, viewport_height);
+    lv_obj_align(detail_viewport_, LV_ALIGN_TOP_LEFT, x, y);
+  }
+}
+
+void GalleryView::set_preview_error_visible_(bool visible) {
+  if (!preview_error_label_) {
+    return;
+  }
+  if (visible) {
+    lv_obj_remove_flag(preview_error_label_, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(preview_error_label_, LV_OBJ_FLAG_HIDDEN);
+  }
 }
 
 void GalleryView::update_delete_choice_(int32_t choice) {

@@ -29,6 +29,8 @@ struct SymbolKeyMapping {
   uint32_t symbol;
 };
 
+bool is_screenshot_key_(uint16_t code) { return code == KEY_SYSRQ || code == KEY_PRINT; }
+
 constexpr std::array<SymbolKeyMapping, 32> kSymbolKeyMappings{{
     {26, '!'}, {27, '@'}, {39, '#'},  {40, '$'}, {41, '%'}, {43, '^'}, {51, '&'},  {52, '*'},
     {53, '('}, {94, ')'}, {55, '~'},  {69, '`'}, {70, '_'}, {71, '-'}, {72, '+'},  {73, '='},
@@ -53,12 +55,15 @@ bool has_camera_keys_(int fd) {
   }
 
   return test_bit_(key_bits, KEY_ESC) || test_bit_(key_bits, KEY_ENTER) ||
-         test_bit_(key_bits, KEY_KPENTER) || test_bit_(key_bits, KEY_F) ||
+         test_bit_(key_bits, KEY_KPENTER) || test_bit_(key_bits, KEY_UP) ||
+         test_bit_(key_bits, KEY_DOWN) || test_bit_(key_bits, KEY_LEFT) ||
+         test_bit_(key_bits, KEY_RIGHT) || test_bit_(key_bits, KEY_F) ||
          test_bit_(key_bits, KEY_X) || test_bit_(key_bits, KEY_Z) || test_bit_(key_bits, KEY_C) ||
-         test_bit_(key_bits, KEY_J) || test_bit_(key_bits, KEY_U) || test_bit_(key_bits, KEY_1) ||
-         test_bit_(key_bits, KEY_2) || test_bit_(key_bits, KEY_3) || test_bit_(key_bits, KEY_4) ||
-         test_bit_(key_bits, KEY_5) || test_bit_(key_bits, KEY_6) || test_bit_(key_bits, KEY_7) ||
-         test_bit_(key_bits, KEY_8);
+         test_bit_(key_bits, KEY_J) || test_bit_(key_bits, KEY_SYSRQ) ||
+         test_bit_(key_bits, KEY_PRINT) || test_bit_(key_bits, KEY_U) ||
+         test_bit_(key_bits, KEY_1) || test_bit_(key_bits, KEY_2) || test_bit_(key_bits, KEY_3) ||
+         test_bit_(key_bits, KEY_4) || test_bit_(key_bits, KEY_5) || test_bit_(key_bits, KEY_6) ||
+         test_bit_(key_bits, KEY_7) || test_bit_(key_bits, KEY_8);
 }
 
 bool env_enabled_(const char* name, bool fallback) {
@@ -234,6 +239,15 @@ void LinuxKeypad::push_key_event_(uint16_t code, int32_t value) {
     return;
   }
 
+#if defined(__linux__)
+  if (is_screenshot_key_(code)) {
+    if (value == 1 && action_callback_) {
+      action_callback_(app::AppAction::Screenshot);
+    }
+    return;
+  }
+#endif
+
   const uint32_t key = translate_key_(code);
   if (key == 0) {
     return;
@@ -272,9 +286,9 @@ void LinuxKeypad::push_key_event_(uint16_t code, int32_t value) {
     action_callback_(app::AppAction::OpenGallery);
   } else if (key == '8') {
     action_callback_(app::AppAction::ToggleCaptureMode);
-  } else if (key == 'x' || key == 'X' || key == LV_KEY_UP) {
+  } else if (key == 'x' || key == 'X' || key == LV_KEY_DOWN) {
     action_callback_(app::AppAction::PanDown);
-  } else if (key == 'f' || key == 'F' || key == LV_KEY_DOWN) {
+  } else if (key == 'f' || key == 'F' || key == LV_KEY_UP) {
     action_callback_(app::AppAction::PanUp);
   }
 }

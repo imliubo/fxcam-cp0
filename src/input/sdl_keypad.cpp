@@ -13,9 +13,10 @@ void SdlKeypad::poll() {
     return;
   }
 
-  const bool esc_pressed     = state[SDL_SCANCODE_ESCAPE] != 0;
-  const bool help_pressed    = state[SDL_SCANCODE_1] != 0 || state[SDL_SCANCODE_F1] != 0;
-  const bool capture_pressed = state[SDL_SCANCODE_6] != 0;
+  const bool esc_pressed        = state[SDL_SCANCODE_ESCAPE] != 0;
+  const bool help_pressed       = state[SDL_SCANCODE_1] != 0 || state[SDL_SCANCODE_F1] != 0;
+  const bool capture_pressed    = state[SDL_SCANCODE_6] != 0;
+  const bool screenshot_pressed = state[SDL_SCANCODE_PRINTSCREEN] != 0;
   const bool confirm_pressed = state[SDL_SCANCODE_RETURN] != 0 || state[SDL_SCANCODE_KP_ENTER] != 0;
   const bool delete_pressed = state[SDL_SCANCODE_DELETE] != 0 || state[SDL_SCANCODE_BACKSPACE] != 0;
   const bool zoom_out_pressed        = state[SDL_SCANCODE_4] != 0;
@@ -43,6 +44,10 @@ void SdlKeypad::poll() {
 
   if (capture_pressed && !capture_pressed_) {
     dispatch_(app::AppAction::Capture);
+  }
+
+  if (screenshot_pressed && !screenshot_pressed_) {
+    dispatch_(app::AppAction::Screenshot);
   }
 
   if (confirm_pressed && !confirm_pressed_) {
@@ -100,6 +105,7 @@ void SdlKeypad::poll() {
   esc_pressed_             = esc_pressed;
   help_pressed_            = help_pressed;
   capture_pressed_         = capture_pressed;
+  screenshot_pressed_      = screenshot_pressed;
   confirm_pressed_         = confirm_pressed;
   delete_pressed_          = delete_pressed;
   zoom_out_pressed_        = zoom_out_pressed;

@@ -39,6 +39,21 @@ Camera still frame -> decode/convert -> crop/resize -> active filter
 The active filter is stored atomically because libcamera completion callbacks can run outside the
 LVGL main loop. Preview and still capture read the same value.
 
+## Gallery Data Flow
+
+Gallery browsing and detail inspection use separate image paths:
+
+```text
+GalleryService -> cached 320 x 170 JPEG -> GalleryView overview
+               -> original JPEG -> TJPGD RGB888 draw buffer -> LVGL detail transform
+```
+
+The overview cache keeps image-to-image navigation inexpensive. Entering detail view decodes only
+the selected JPEG at full resolution, with a 32 MiB decoded-size limit. The draw buffer remains
+owned by `GalleryView` while LVGL references it and is released when leaving detail view or changing
+images. Zoom is relative to the fitted image; normalized pan coordinates are clamped before the
+view transform and mirrored by the navigator overlay.
+
 ## Filters
 
 `CameraFilter` contains the original and iPhone-style effects followed by 88 generated retro
@@ -68,7 +83,7 @@ Runtime asset lookup checks explicit environment roots, configured roots, source
 and `/usr/share/fxcam`. The Debian package installs:
 
 ```text
-/usr/bin/fxcam
+/usr/share/APPLaunch/bin/fxcam
 /usr/share/fxcam/{audio,fonts}
 /usr/share/APPLaunch/applications/fxcam.desktop
 /usr/share/APPLaunch/share/images/fxcam.png
@@ -85,6 +100,7 @@ attributes, and assembles the package with `ar`.
 - `photo_watermark_test`: text content and bottom-left rendering bounds.
 - `device_config_test`: supported resolution parsing and fallback behavior.
 - `screen_lifecycle_test`: idempotent ViewModel enter/exit callbacks.
+- `gallery_test`: full JPEG decoding plus detail zoom, pan, reset, info, and exit state.
 
 CMake explicitly undefines `NDEBUG` for test targets so these assertion-based tests remain active
 in both Debug and Release configurations.

@@ -52,6 +52,7 @@
  *====================*/
 
 #define LV_USE_OBSERVER 1
+#define LV_USE_SNAPSHOT 1
 
 /*====================
    LOG SETTINGS

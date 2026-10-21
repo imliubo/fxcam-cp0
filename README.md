@@ -2,10 +2,15 @@
 
 [中文说明](README_zh.md)
 
+FXCam is a pocket-sized creative camera for CardputerZero, featuring 106 live filters,
+full-resolution photo capture, timestamped photo watermarks, and a zoomable on-device gallery.
+
 FXCam is a camera with retro effects for M5CardputerZero / CM0. It uses LVGL 9 for the
 interface, libcamera for the CSI camera, V4L2 for USB cameras, and APPLaunch for device
 integration. The project was initially based on the
 [CardputerZero camera project](https://github.com/CardputerZero/CameraApp).
+The full-resolution gallery preview design and TJPGD decoder are adapted from
+[CardputerZero/Files](https://github.com/CardputerZero/Files).
 
 ## Features
 
@@ -16,12 +21,15 @@ integration. The project was initially based on the
 - Transparent photo watermark with device name, local time, app name, aperture, active filter,
   and author signature.
 - EXIF metadata for CSI-camera captures.
-- Built-in gallery with image details and deletion confirmation.
+- Built-in gallery with cached thumbnails, full-resolution detail zoom/pan, image information,
+  and deletion confirmation.
+- Portal-ready 320 x 170 screenshots of any app screen.
 - CSI camera through libcamera with automatic V4L2 USB-camera fallback.
 - APPLaunch desktop entry, icon, arm64 Debian package, and direct ADB deployment.
 
 Photos are saved under `~/Pictures/DCIM/Camera`. Video support writes MJPEG AVI files to
 `~/Videos/Camera`, although the current device UI focuses on still photography.
+App screenshots are saved under `~/Pictures/Screenshots/FXCam`.
 
 ## Controls
 
@@ -30,6 +38,7 @@ Photos are saved under `~/Pictures/DCIM/Camera`. Video support writes MJPEG AVI 
 | `Fn + Left`, `Z`, `H`, `2`, `,` | Previous filter |
 | `Fn + Right`, `C`, `J`, `3`, `.` | Next filter |
 | `6`, `Enter` | Capture photo |
+| `Fn + J` (`Print Screen`) | Save an app screenshot |
 | `4`, `Esc` | Return / exit |
 | `5`, `7` | Zoom out / in |
 | `8` | Open gallery |
@@ -38,7 +47,9 @@ Photos are saved under `~/Pictures/DCIM/Camera`. Video support writes MJPEG AVI 
 | `U` | Switch CSI / USB camera backend |
 
 In the gallery, `4` returns to the camera, `5` and `7` select the previous or next image,
-`6` opens image information, `8` requests deletion, and `Enter` confirms a dialog action.
+`6` opens image information, and `8` requests deletion. `Enter` opens the selected image at full
+resolution. In detail view, use `5` / `7` to zoom, `Z` / `H` / `C` / `J` and `F` / `X` to pan,
+`8` to reset the view, and `4`, `Esc`, or `Enter` to return to the gallery.
 
 ## Requirements
 

@@ -6,7 +6,7 @@
 
 cmake_minimum_required(VERSION 3.23)
 
-set(FXCAM_VERSION "1.0.0" CACHE STRING "FXCam semantic version")
+set(FXCAM_VERSION "1.0.1" CACHE STRING "FXCam semantic version")
 project(fxcam VERSION "${FXCAM_VERSION}" LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -474,6 +474,22 @@ if(FXCAM_BUILD_TESTS)
     target_include_directories(screen_lifecycle_test PRIVATE ${APP_SOURCE_DIR})
     target_link_libraries(screen_lifecycle_test PRIVATE lvgl::lvgl)
     add_test(NAME screen_lifecycle_test COMMAND screen_lifecycle_test)
+
+    add_executable(gallery_test tests/gallery_test.cpp)
+    fxcam_enable_test_assertions(gallery_test)
+    target_include_directories(gallery_test PRIVATE ${APP_SOURCE_DIR})
+    target_link_libraries(gallery_test PRIVATE
+        ${PROJECT_NAME}_ui
+        $<$<BOOL:${USE_DESKTOP}>:${JPEG_TARGET}>
+        $<$<NOT:$<BOOL:${USE_DESKTOP}>>:CM0::JPEG>
+    )
+    add_test(NAME gallery_test COMMAND gallery_test)
+
+    add_executable(screenshot_test tests/screenshot_test.cpp)
+    fxcam_enable_test_assertions(screenshot_test)
+    target_include_directories(screenshot_test PRIVATE ${APP_SOURCE_DIR})
+    target_link_libraries(screenshot_test PRIVATE ${PROJECT_NAME}_ui)
+    add_test(NAME screenshot_test COMMAND screenshot_test)
 endif()
 
 add_library(${PROJECT_NAME}_viewmodels STATIC
@@ -486,6 +502,8 @@ target_link_libraries(${PROJECT_NAME}_viewmodels PUBLIC ${PROJECT_NAME}_services
 
 add_library(${PROJECT_NAME}_ui STATIC
     src/ui/app_font.cpp
+    src/ui/app_screenshot.cpp
+    src/ui/gallery_jpeg_decoder.cpp
     src/views/camera_view.cpp
     src/views/gallery_view.cpp
     src/views/splash_view.cpp
@@ -506,8 +524,10 @@ target_compile_definitions(${PROJECT_NAME}_input PUBLIC
 target_link_libraries(${PROJECT_NAME}_input PUBLIC ${PROJECT_NAME}_utils lvgl::lvgl)
 
 if(USE_DESKTOP)
-    target_link_libraries(${PROJECT_NAME}_ui PUBLIC ${SDL2_TARGET})
+    target_link_libraries(${PROJECT_NAME}_ui PUBLIC ${SDL2_TARGET} PNG::PNG)
     target_link_libraries(${PROJECT_NAME}_input PUBLIC ${SDL2_TARGET})
+else()
+    target_link_libraries(${PROJECT_NAME}_ui PUBLIC CM0::PNG)
 endif()
 
 add_executable(${PROJECT_NAME} src/main.cpp)

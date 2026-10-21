@@ -5,7 +5,7 @@
 #endif
 
 #ifndef FXCAM_VERSION
-#define FXCAM_VERSION "1.0.0"
+#define FXCAM_VERSION "1.0.1"
 #endif
 
 namespace app {

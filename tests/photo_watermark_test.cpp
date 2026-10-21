@@ -60,10 +60,28 @@ void test_renderer_only_modifies_bottom_left_region() {
   assert(pixels[top_right + 2] == initial);
 }
 
+void test_renderer_draws_lowercase_p_in_device_name() {
+  constexpr int width       = 640;
+  constexpr int height      = 480;
+  constexpr uint8_t initial = 120;
+  std::vector<uint8_t> pixels(static_cast<size_t>(width * height * 3), initial);
+  const service::PhotoWatermarkInfo info{"p", "", "", "", "", ""};
+
+  service::apply_photo_watermark_rgb888(pixels, width, height, info);
+
+  // At this resolution the first glyph starts at (30, 425). A lowercase p has
+  // a blank top row and a set left pixel on row two; the fallback '?' does not.
+  const size_t blank_top_pixel = static_cast<size_t>(425 * width + 31) * 3;
+  const size_t set_stem_pixel  = static_cast<size_t>(427 * width + 30) * 3;
+  assert(pixels[blank_top_pixel] == initial);
+  assert(pixels[set_stem_pixel] == 255);
+}
+
 }  // namespace
 
 int main() {
   test_lines_include_all_capture_information();
   test_renderer_only_modifies_bottom_left_region();
+  test_renderer_draws_lowercase_p_in_device_name();
   return 0;
 }
